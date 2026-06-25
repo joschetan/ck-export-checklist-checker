@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import os
 import json
+from google import genai
+from google.genai import types
 
 # Page Configuration & Title Setup
 st.set_page_config(page_title="CK EXPORT CHECKLIST CHECKER", layout="wide")
@@ -16,6 +18,14 @@ st.markdown("""
 
 st.markdown('<div class="main-title">🚢 CK EXPORT CHECKLIST CHECKER</div>', unsafe_allow_html=True)
 
+# Initialize Gemini Client using Secrets
+def get_gemini_client():
+    if "GEMINI_API_KEY" in st.secrets:
+        return genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+    return None
+
+client = get_gemini_client()
+
 # ------------------------------------------------------------------
 # DATA HANDLING (Rules Storage)
 # ------------------------------------------------------------------
@@ -27,16 +37,14 @@ def load_rules():
             return json.load(f)
     return {}
 
-def save_rules(shipper_name, instructions, files_data=None):
+def save_rules(shipper_name, instructions):
     rules = load_rules()
     rules[shipper_name.upper().strip()] = {
-        "instructions": instructions,
-        "has_excel": True if files_data else False
+        "instructions": instructions
     }
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(rules, f, indent=4)
 
-# Load existing trained shippers
 trained_shippers = load_rules()
 
 # ------------------------------------------------------------------
@@ -47,7 +55,6 @@ with st.sidebar:
     show_admin = st.checkbox("Train AI / Add New Shipper Rules")
     
     if show_admin:
-        # Password set to CK@SOHAM
         password = st.text_input("Enter Admin Password", type="password")
         if password == "CK@SOHAM":
             st.success("Access Granted!")
@@ -55,11 +62,10 @@ with st.sidebar:
             
             new_shipper = st.text_input("Enter New Shipper Name (e.g. JYOTINDRA INTERNATIONAL)").upper().strip()
             admin_instructions = st.text_area("Write Instructions in Hindi/English (e.g. BKT rules, HS codes logic etc.)")
-            uploaded_excel = st.file_uploader("Upload Shipper Master Data / Excel List (Optional)", type=["xlsx", "xls", "csv"])
             
             if st.button("Train AI for this Shipper 🧠"):
                 if new_shipper and admin_instructions:
-                    save_rules(new_shipper, admin_instructions, uploaded_excel)
+                    save_rules(new_shipper, admin_instructions)
                     st.success(f"AI successfully trained for {new_shipper}! It will now appear in the User dropdown.")
                     st.rerun()
                 else:
@@ -77,7 +83,6 @@ shipper_list = list(trained_shippers.keys())
 if not shipper_list:
     st.info("👋 Welcome! Currently, no shippers are trained. Please use the Admin panel on the left with your password to train the AI for your first shipper.")
 else:
-    # Searchable Dropdown with "jyoti" type search enabled
     selected_shipper = st.selectbox("🔍 Search & Select Shipper Name", ["-- Select Shipper --"] + shipper_list)
     
     if selected_shipper != "-- Select Shipper --":
@@ -85,7 +90,7 @@ else:
         
         col1, col2 = st.columns(2)
         with col1:
-            f1 = st.file_uploader("1. Upload Checklist (PDF/Image)", type=["pdf", "png", "jpg", "jpeg"])
+            f1 = st.file_uploader("1. Upload Checklist (PDF)", type=["pdf"])
             f2 = st.file_uploader("2. Upload Invoice & Packing List (PDF)", type=["pdf"])
         with col2:
             f3 = st.file_uploader("3. Upload GST Invoice (PDF)", type=["pdf"])
@@ -94,13 +99,61 @@ else:
         st.markdown('</div>', unsafe_allow_html=True)
         
         if st.button("🚀 Analyze & Check Mistakes"):
-            if f1 and f2: 
+            if not client:
+                st.error("Gemini API Key missing in Streamlit Secrets Locker!")
+            elif f1 and f2: 
                 with st.spinner("AI is auditing documents based on your specific trained rules..."):
-                    
-                    # Gemini API Connectivity Placeholder
-                    st.markdown("### 📢 Audit Report (Result)")
-                    st.error("❌ **Alert / Warning:** Checklist me Freight 2000 USD likha hai par Invoice ya kisi aur document pe nahi mila. **Please check Freight manually.**")
-                    st.warning("⚠️ **Warning:** HSN Code 40111010 ke samne Description Master list se match nahi ho raha hai.")
-                    st.success("✅ **OK:** AD Code aur Bank Account Details bilkul sahi hain.")
+                    try:
+                        # Prepare files for Gemini API
+                        uploaded_contents = []
+                        
+                        # Add files if they exist
+                        for f, label in [(f1, "Checklist"), (f2, "Invoice"), (f3, "GST_Invoice"), (f4, "Declaration")]:
+                            if f:
+                                bytes_data = f.read()
+                                uploaded_contents.append(
+                                    types.Part.from_bytes(
+                                        data=bytes_data,
+                                        mime_type="application/pdf"
+                                    )
+                                )
+                        
+                        # Get specific trained instructions for this shipper
+                        shipper_specific_rules = trained_shippers[selected_shipper]["instructions"]
+                        
+                        # System Prompt to guide the AI behavior
+                        system_instruction = """
+                        You are a senior Customs House Agent (CHA) Document Auditor. Your job is to thoroughly check the 'Checklist' file against the 'Invoice', 'GST Invoice', 'Declaration' and the custom user rules provided.
+                        
+                        Provide your analysis response in clear Hindi/Hinglish language so the staff can easily understand.
+                        Structure your response precisely like this:
+                        ❌ **Alert / Warning:** [List data mismatches, typos, or specific custom rule violations here]
+                        ⚠️ **Manual Check Needed:** [List parameters that could not be verified automatically, like manual freight checks]
+                        ✅ **OK:** [List what fields perfectly matched]
+                        """
+                        
+                        # Final prompt combining user rules
+                        final_prompt = f"""
+                        Here are the specific business conditions and rules you must follow for this shipper ({selected_shipper}):
+                        {shipper_specific_rules}
+                        
+                        Please audit the uploaded documents based on these rules and standard customs documentation checks.
+                        """
+                        
+                        # Call Gemini 2.5 Flash (Best for heavy document reading)
+                        response = client.models.generate_content(
+                            model='gemini-2.5-flash',
+                            contents=uploaded_contents + [final_prompt],
+                            config=types.GenerateContentConfig(
+                                system_instruction=system_instruction,
+                                temperature=0.2
+                            )
+                        )
+                        
+                        st.markdown("### 📢 Audit Report (Result)")
+                        st.write(response.text)
+                        
+                    except Exception as e:
+                        st.error(f"An error occurred during analysis: {str(e)}")
             else:
                 st.error("Please upload at least the Checklist and Invoice to start auditing.")
