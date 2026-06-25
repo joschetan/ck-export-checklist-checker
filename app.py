@@ -27,7 +27,7 @@ def get_gemini_client():
 client = get_gemini_client()
 
 # ------------------------------------------------------------------
-# DATA HANDLING (Rules Storage)
+# DATA HANDLING (Rules & Excel Text Storage)
 # ------------------------------------------------------------------
 DATA_FILE = "shipper_rules.json"
 
@@ -37,10 +37,11 @@ def load_rules():
             return json.load(f)
     return {}
 
-def save_rules(shipper_name, instructions):
+def save_rules(shipper_name, instructions, excel_text=""):
     rules = load_rules()
     rules[shipper_name.upper().strip()] = {
-        "instructions": instructions
+        "instructions": instructions,
+        "excel_data_summary": excel_text  # Excel data converted to text for AI
     }
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(rules, f, indent=4)
@@ -60,12 +61,31 @@ with st.sidebar:
             st.success("Access Granted!")
             st.markdown("---")
             
-            new_shipper = st.text_input("Enter New Shipper Name (e.g. JYOTINDRA INTERNATIONAL)").upper().strip()
-            admin_instructions = st.text_area("Write Instructions in Hindi/English (e.g. BKT rules, HS codes logic etc.)")
+            new_shipper = st.text_input("Enter New Shipper Name (e.g. BKT)").upper().strip()
+            
+            # NEW: Excel File Upload Option for Admin/Shipper Master Data
+            uploaded_excel = st.file_uploader("Upload Shipper Master Data / Excel List (Optional)", type=["xlsx", "xls", "csv"])
+            
+            admin_instructions = st.text_area("Write Instructions in Hindi/English (e.g. 1st row heading hai, Column A me HS Code hai...)", height=150)
             
             if st.button("Train AI for this Shipper 🧠"):
                 if new_shipper and admin_instructions:
-                    save_rules(new_shipper, admin_instructions)
+                    excel_text = ""
+                    # If admin uploads an excel sheet, convert it to a text format that Gemini can read easily
+                    if uploaded_excel is not None:
+                        try:
+                            if uploaded_excel.name.endswith('.csv'):
+                                df = pd.read_csv(uploaded_excel)
+                            else:
+                                df = pd.read_excel(uploaded_excel)
+                            
+                            # Convert entire dataframe to string format for AI context
+                            excel_text = df.to_string()
+                            st.info("Excel data parsed successfully!")
+                        except Exception as e:
+                            st.error(f"Excel read error: {str(e)}")
+                    
+                    save_rules(new_shipper, admin_instructions, excel_text)
                     st.success(f"AI successfully trained for {new_shipper}! It will now appear in the User dropdown.")
                     st.rerun()
                 else:
@@ -104,10 +124,8 @@ else:
             elif f1 and f2: 
                 with st.spinner("AI is auditing documents based on your specific trained rules..."):
                     try:
-                        # Prepare files for Gemini API
                         uploaded_contents = []
                         
-                        # Add files if they exist
                         for f, label in [(f1, "Checklist"), (f2, "Invoice"), (f3, "GST_Invoice"), (f4, "Declaration")]:
                             if f:
                                 bytes_data = f.read()
@@ -118,12 +136,13 @@ else:
                                     )
                                 )
                         
-                        # Get specific trained instructions for this shipper
-                        shipper_specific_rules = trained_shippers[selected_shipper]["instructions"]
+                        # Fetch saved instructions and excel text
+                        shipper_info = trained_shippers[selected_shipper]
+                        shipper_specific_rules = shipper_info.get("instructions", "")
+                        shipper_excel_data = shipper_info.get("excel_data_summary", "")
                         
-                        # System Prompt to guide the AI behavior
                         system_instruction = """
-                        You are a senior Customs House Agent (CHA) Document Auditor. Your job is to thoroughly check the 'Checklist' file against the 'Invoice', 'GST Invoice', 'Declaration' and the custom user rules provided.
+                        You are a senior Customs House Agent (CHA) Document Auditor. Your job is to thoroughly check the 'Checklist' file against the 'Invoice', 'GST Invoice', 'Declaration' and the custom user rules/master data provided.
                         
                         Provide your analysis response in clear Hindi/Hinglish language so the staff can easily understand.
                         Structure your response precisely like this:
@@ -132,15 +151,19 @@ else:
                         ✅ **OK:** [List what fields perfectly matched]
                         """
                         
-                        # Final prompt combining user rules
+                        # Injecting the saved Excel data right into the prompt along with Hindi instructions
                         final_prompt = f"""
-                        Here are the specific business conditions and rules you must follow for this shipper ({selected_shipper}):
+                        Here are the specific business conditions and formatting layout instructions provided by the Admin for this shipper ({selected_shipper}):
                         {shipper_specific_rules}
                         
-                        Please audit the uploaded documents based on these rules and standard customs documentation checks.
+                        ---
+                        HERE IS THE MASTER EXCEL DATA PROVIDED BY THE ADMIN FOR THIS SHIPPER:
+                        {shipper_excel_data}
+                        ---
+                        
+                        Please audit the uploaded staff documents strictly according to the master excel layout and conditions mentioned above.
                         """
                         
-                        # Call Gemini 2.5 Flash (Best for heavy document reading)
                         response = client.models.generate_content(
                             model='gemini-2.5-flash',
                             contents=uploaded_contents + [final_prompt],
