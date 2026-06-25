@@ -47,6 +47,20 @@ def save_rules(shipper_name, instructions, excel_text=""):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(rules, f, indent=4)
 
+def delete_shipper_rule(shipper_name):
+    rules = load_rules()
+    s_name = shipper_name.upper().strip()
+    if s_name in rules:
+        del rules[s_name]
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(rules, f, indent=4)
+        
+        # Also delete PDF master file if exists
+        if os.path.exists(f"{s_name}_master.pdf"):
+            os.remove(f"{s_name}_master.pdf")
+        return True
+    return False
+
 def load_general_rules():
     if os.path.exists(GENERAL_RULES_FILE):
         with open(GENERAL_RULES_FILE, "r", encoding="utf-8") as f:
@@ -56,6 +70,12 @@ def load_general_rules():
 def save_general_rules(instructions, has_pdf=False):
     with open(GENERAL_RULES_FILE, "w", encoding="utf-8") as f:
         json.dump({"instructions": instructions, "has_pdf": has_pdf}, f, indent=4)
+
+def delete_general_rules():
+    if os.path.exists(GENERAL_RULES_FILE):
+        os.remove(GENERAL_RULES_FILE)
+    if os.path.exists("general_sample.pdf"):
+        os.remove("general_sample.pdf")
 
 trained_shippers = load_rules()
 general_rules_data = load_general_rules()
@@ -73,29 +93,40 @@ with st.sidebar:
             st.success("Access Granted!")
             st.markdown("---")
             
-            # --- TAB SELECTION FOR ADMIN ---
-            admin_tab = st.radio("Choose What to Train:", ["General Rules (All Shippers)", "Specific Shipper Rules"])
+            admin_tab = st.radio("Choose Action:", ["General Rules (All Shippers)", "Specific Shipper Rules", "View / Delete Existing Rules"])
             
+            # --- 1. GENERAL RULES ---
             if admin_tab == "General Rules (All Shippers)":
-                st.subheader("🌐 General Instructions Setup")
+                st.subheader("🌐 General Instructions")
                 gen_pdf = st.file_uploader("Upload Sample Checklist (PDF)", type=["pdf"], key="gen_pdf")
-                gen_instructions = st.text_area("Write General Instructions (Sare Shippers pe lagu hone wale niyam):", value=general_rules_data.get("instructions", ""), height=150)
+                
+                # Using session state to clear the text after saving
+                if "gen_text" not in st.session_state:
+                    st.session_state.gen_text = ""
+                    
+                gen_instructions = st.text_area("Write General Instructions:", value=st.session_state.gen_text, height=120)
                 
                 if st.button("Save General Instructions 💾"):
-                    save_general_rules(gen_instructions, has_pdf=(gen_pdf is not None))
-                    if gen_pdf:
-                        with open("general_sample.pdf", "wb") as f:
-                            f.write(gen_pdf.read())
-                    st.success("General Instructions saved successfully for all shippers!")
-                    st.rerun()
+                    if gen_instructions:
+                        save_general_rules(gen_instructions, has_pdf=(gen_pdf is not None))
+                        if gen_pdf:
+                            with open("general_sample.pdf", "wb") as f:
+                                f.write(gen_pdf.read())
+                        st.success("✅ General Instructions saved successfully for all shippers! (Aapki baat maan li gai hai)")
+                        st.toast("Saved! 🧠")
+                        st.session_state.gen_text = "" # Clears text box
+                        st.rerun()
                     
+            # --- 2. SPECIFIC SHIPPER RULES ---
             elif admin_tab == "Specific Shipper Rules":
                 st.subheader("🏢 Specific Shipper Setup")
                 new_shipper = st.text_input("Enter Shipper Name (e.g. BKT)").upper().strip()
-                
-                # UPDATED: Support for BOTH Excel and PDF master file upload
                 uploaded_master = st.file_uploader("Upload Shipper Master File (Excel or PDF)", type=["xlsx", "xls", "csv", "pdf"])
-                admin_instructions = st.text_area("Write Specific Instructions for this Shipper:", height=150)
+                
+                if "ship_text" not in st.session_state:
+                    st.session_state.ship_text = ""
+                    
+                admin_instructions = st.text_area("Write Specific Instructions:", value=st.session_state.ship_text, height=120)
                 
                 if st.button("Train AI for this Shipper 🧠"):
                     if new_shipper and admin_instructions:
@@ -103,34 +134,68 @@ with st.sidebar:
                         if uploaded_master is not None:
                             try:
                                 if uploaded_master.name.endswith('.pdf'):
-                                    # If it's a PDF, we will save it locally to pass to Gemini later
                                     with open(f"{new_shipper}_master.pdf", "wb") as f:
                                         f.write(uploaded_master.read())
                                     master_text = "[PDF_MASTER_FILE_SAVED]"
                                 else:
-                                    # If it's Excel
                                     if uploaded_master.name.endswith('.csv'):
                                         df = pd.read_csv(uploaded_master)
                                     else:
                                         df = pd.read_excel(uploaded_master)
                                     master_text = df.to_string()
-                                st.info("Master file parsed successfully!")
                             except Exception as e:
                                 st.error(f"File read error: {str(e)}")
                         
                         save_rules(new_shipper, admin_instructions, master_text)
-                        st.success(f"AI successfully trained for {new_shipper}!")
+                        st.success(f"✅ AI successfully trained for {new_shipper}! Old data updated. (Aapki baat maan li gai hai)")
+                        st.toast(f"{new_shipper} Updated!")
+                        st.session_state.ship_text = "" # Clears text box
                         st.rerun()
                     else:
-                        st.error("Please enter Shipper Name and Instructions both.")
+                        st.error("Please enter Shipper Name and Instructions.")
+            
+            # --- 3. VIEW & DELETE ACTIVE RULES ---
+            elif admin_tab == "View / Delete Existing Rules":
+                st.subheader("🔍 Active Brain Memory")
+                
+                # Show General Rules
+                st.markdown("**🌐 Active General Rules:**")
+                if general_rules_data.get("instructions"):
+                    st.info(general_rules_data.get("instructions"))
+                    if st.button("Delete General Rules 🗑️"):
+                        delete_general_rules()
+                        st.success("✅ General conditions successfully deleted!")
+                        st.rerun()
+                else:
+                    st.caption("No General Rules saved yet.")
+                
+                st.markdown("---")
+                
+                # Show Shipper Specific Rules
+                st.markdown("**🏢 Active Shipper Rules:**")
+                if trained_shippers:
+                    for s_name, s_info in trained_shippers.items():
+                        with st.expander(f"📌 {s_name} (Click to View rules)"):
+                            st.write("**Instructions Given:**", s_info.get("instructions"))
+                            if s_info.get("excel_data_summary"):
+                                st.caption("📄 Master file linked.")
+                            if st.button(f"Delete {s_name} Conditions ❌", key=f"del_{s_name}"):
+                                if delete_shipper_rule(s_name):
+                                    st.success(f"✅ {s_name} condition successfully deleted from AI Brain!")
+                                    st.rerun()
+                else:
+                    st.caption("No specific shippers trained yet.")
                         
         elif password != "":
-            st.error("Incorrect Password! (Caps Lock Check karein)")
+            st.error("Incorrect Password!")
 
 # ------------------------------------------------------------------
 # SECTION 2: USER AUDIT / CHECKLIST VERIFICATION
 # ------------------------------------------------------------------
 st.markdown('<h2 class="user-header">📋 Staff Verification Panel</h2>', unsafe_allow_html=True)
+
+if general_rules_data.get("instructions"):
+    st.caption("⚙️ **General Rules Active:** AI will automatically apply global custom guidelines to all checks.")
 
 shipper_list = list(trained_shippers.keys())
 
@@ -160,23 +225,19 @@ else:
                     try:
                         uploaded_contents = []
                         
-                        # Load Staff Uploaded Files
                         for f, label in [(f1, "Checklist"), (f2, "Invoice"), (f3, "GST_Invoice"), (f4, "Declaration")]:
                             if f:
                                 bytes_data = f.read()
                                 uploaded_contents.append(types.Part.from_bytes(data=bytes_data, mime_type="application/pdf"))
                         
-                        # Load General Sample Checklist PDF if exists
                         if general_rules_data.get("has_pdf") and os.path.exists("general_sample.pdf"):
                             with open("general_sample.pdf", "rb") as f:
                                 uploaded_contents.append(types.Part.from_bytes(data=f.read(), mime_type="application/pdf"))
                         
-                        # Load Shipper Specific PDF Master if exists
                         if os.path.exists(f"{selected_shipper}_master.pdf"):
                             with open(f"{selected_shipper}_master.pdf", "rb") as f:
                                 uploaded_contents.append(types.Part.from_bytes(data=f.read(), mime_type="application/pdf"))
                         
-                        # Fetch saved text rules
                         shipper_info = trained_shippers[selected_shipper]
                         shipper_specific_rules = shipper_info.get("instructions", "")
                         shipper_excel_data = shipper_info.get("excel_data_summary", "")
