@@ -12,9 +12,9 @@ st.markdown("""
     .admin-header { color: #D97706; font-weight: bold; }
     .user-header { color: #2563EB; font-weight: bold; }
     </style>
-""", unsafe_rules=True)
+""", unsafe_allow_html=True)
 
-st.markdown('<div class="main-title">🚢 CK EXPORT CHECKLIST CHECKER</div>', unsafe_rules=True)
+st.markdown('<div class="main-title">🚢 CK EXPORT CHECKLIST CHECKER</div>', unsafe_allow_html=True)
 
 # ------------------------------------------------------------------
 # DATA HANDLING (Rules Storage)
@@ -43,7 +43,7 @@ trained_shippers = load_rules()
 # SECTION 1: ADMIN CONTROL / AI TRAINING (PASSWORD: CK@SOHAM)
 # ------------------------------------------------------------------
 with st.sidebar:
-    st.markdown('<h2 class="admin-header">⚙️ Admin / AI Training Control</h2>', unsafe_rules=True)
+    st.markdown('<h2 class="admin-header">⚙️ Admin / AI Training Control</h2>', unsafe_allow_html=True)
     show_admin = st.checkbox("Train AI / Add New Shipper Rules")
     
     if show_admin:
@@ -70,7 +70,7 @@ with st.sidebar:
 # ------------------------------------------------------------------
 # SECTION 2: USER AUDIT / CHECKLIST VERIFICATION
 # ------------------------------------------------------------------
-st.markdown('<h2 class="user-header">📋 Staff Verification Panel</h2>', unsafe_rules=True)
+st.markdown('<h2 class="user-header">📋 Staff Verification Panel</h2>', unsafe_allow_html=True)
 
 shipper_list = list(trained_shippers.keys())
 
@@ -81,7 +81,7 @@ else:
     selected_shipper = st.selectbox("🔍 Search & Select Shipper Name", ["-- Select Shipper --"] + shipper_list)
     
     if selected_shipper != "-- Select Shipper --":
-        st.markdown(f'<div class="section-box"><h3>📂 Upload Documents for {selected_shipper}</h3>', unsafe_rules=True)
+        st.markdown(f'<div class="section-box"><h3>📂 Upload Documents for {selected_shipper}</h3>', unsafe_allow_html=True)
         
         col1, col2 = st.columns(2)
         with col1:
@@ -91,7 +91,7 @@ else:
             f3 = st.file_uploader("3. Upload GST Invoice (PDF)", type=["pdf"])
             f4 = st.file_uploader("4. Upload Declaration (PDF)", type=["pdf"])
         
-        st.markdown('</div>', unsafe_rules=True)
+        st.markdown('</div>', unsafe_allow_html=True)
         
         if st.button("🚀 Analyze & Check Mistakes"):
             if f1 and f2: 
