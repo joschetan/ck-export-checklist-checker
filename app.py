@@ -54,8 +54,6 @@ def delete_shipper_rule(shipper_name):
         del rules[s_name]
         with open(DATA_FILE, "w", encoding="utf-8") as f:
             json.dump(rules, f, indent=4)
-        
-        # Also delete PDF master file if exists
         if os.path.exists(f"{s_name}_master.pdf"):
             os.remove(f"{s_name}_master.pdf")
         return True
@@ -65,7 +63,8 @@ def load_general_rules():
     if os.path.exists(GENERAL_RULES_FILE):
         with open(GENERAL_RULES_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {"instructions": "", "has_pdf": False}
+    # Default format check structure initialized
+    return {"instructions": "", "has_pdf": os.path.exists("general_sample.pdf")}
 
 def save_general_rules(instructions, has_pdf=False):
     with open(GENERAL_RULES_FILE, "w", encoding="utf-8") as f:
@@ -98,24 +97,27 @@ with st.sidebar:
             # --- 1. GENERAL RULES ---
             if admin_tab == "General Rules (All Shippers)":
                 st.subheader("🌐 General Instructions")
-                gen_pdf = st.file_uploader("Upload Sample Checklist (PDF)", type=["pdf"], key="gen_pdf")
+                gen_pdf = st.file_uploader("Upload Sample Checklist (PDF)", type=["pdf"], key="gen_pdf_upload")
                 
-                # Using session state to clear the text after saving
                 if "gen_text" not in st.session_state:
                     st.session_state.gen_text = ""
                     
                 gen_instructions = st.text_area("Write General Instructions:", value=st.session_state.gen_text, height=120)
                 
                 if st.button("Save General Instructions 💾"):
-                    if gen_instructions:
-                        save_general_rules(gen_instructions, has_pdf=(gen_pdf is not None))
-                        if gen_pdf:
-                            with open("general_sample.pdf", "wb") as f:
-                                f.write(gen_pdf.read())
-                        st.success("✅ General Instructions saved successfully for all shippers! (Aapki baat maan li gai hai)")
-                        st.toast("Saved! 🧠")
-                        st.session_state.gen_text = "" # Clears text box
-                        st.rerun()
+                    pdf_saved = False
+                    if gen_pdf is not None:
+                        with open("general_sample.pdf", "wb") as f:
+                            f.write(gen_pdf.read())
+                        pdf_saved = True
+                    elif os.path.exists("general_sample.pdf"):
+                        pdf_saved = True
+                        
+                    save_general_rules(gen_instructions, has_pdf=pdf_saved)
+                    st.success("✅ General Instructions saved successfully for all shippers! (Aapki baat maan li gai hai)")
+                    st.toast("Saved! 🧠")
+                    st.session_state.gen_text = "" 
+                    st.rerun()
                     
             # --- 2. SPECIFIC SHIPPER RULES ---
             elif admin_tab == "Specific Shipper Rules":
@@ -149,7 +151,7 @@ with st.sidebar:
                         save_rules(new_shipper, admin_instructions, master_text)
                         st.success(f"✅ AI successfully trained for {new_shipper}! Old data updated. (Aapki baat maan li gai hai)")
                         st.toast(f"{new_shipper} Updated!")
-                        st.session_state.ship_text = "" # Clears text box
+                        st.session_state.ship_text = "" 
                         st.rerun()
                     else:
                         st.error("Please enter Shipper Name and Instructions.")
@@ -158,10 +160,13 @@ with st.sidebar:
             elif admin_tab == "View / Delete Existing Rules":
                 st.subheader("🔍 Active Brain Memory")
                 
-                # Show General Rules
                 st.markdown("**🌐 Active General Rules:**")
-                if general_rules_data.get("instructions"):
-                    st.info(general_rules_data.get("instructions"))
+                if general_rules_data.get("instructions") or os.path.exists("general_sample.pdf"):
+                    if general_rules_data.get("instructions"):
+                        st.info(general_rules_data.get("instructions"))
+                    if os.path.exists("general_sample.pdf"):
+                        st.success("📄 General Sample Checklist PDF is safely locked in memory.")
+                        
                     if st.button("Delete General Rules 🗑️"):
                         delete_general_rules()
                         st.success("✅ General conditions successfully deleted!")
@@ -171,14 +176,16 @@ with st.sidebar:
                 
                 st.markdown("---")
                 
-                # Show Shipper Specific Rules
                 st.markdown("**🏢 Active Shipper Rules:**")
                 if trained_shippers:
                     for s_name, s_info in trained_shippers.items():
                         with st.expander(f"📌 {s_name} (Click to View rules)"):
                             st.write("**Instructions Given:**", s_info.get("instructions"))
-                            if s_info.get("excel_data_summary"):
-                                st.caption("📄 Master file linked.")
+                            if s_info.get("excel_data_summary") == "[PDF_MASTER_FILE_SAVED]" or os.path.exists(f"{s_name}_master.pdf"):
+                                st.success("📄 PDF Master Guide file linked in memory.")
+                            elif s_info.get("excel_data_summary"):
+                                st.caption("📊 Master Excel sheet data linked.")
+                                
                             if st.button(f"Delete {s_name} Conditions ❌", key=f"del_{s_name}"):
                                 if delete_shipper_rule(s_name):
                                     st.success(f"✅ {s_name} condition successfully deleted from AI Brain!")
@@ -230,7 +237,7 @@ else:
                                 bytes_data = f.read()
                                 uploaded_contents.append(types.Part.from_bytes(data=bytes_data, mime_type="application/pdf"))
                         
-                        if general_rules_data.get("has_pdf") and os.path.exists("general_sample.pdf"):
+                        if os.path.exists("general_sample.pdf"):
                             with open("general_sample.pdf", "rb") as f:
                                 uploaded_contents.append(types.Part.from_bytes(data=f.read(), mime_type="application/pdf"))
                         
@@ -243,8 +250,14 @@ else:
                         shipper_excel_data = shipper_info.get("excel_data_summary", "")
                         general_instructions = general_rules_data.get("instructions", "")
                         
+                        # ADVANCED SYSTEM KNOWLEDGE INJECTED FOR USOFT CHA EXPORT AUDITING
                         system_instruction = """
-                        You are a senior Customs House Agent (CHA) Document Auditor. Your job is to thoroughly check the staff's 'Checklist' file against the 'Invoice', 'GST Invoice', 'Declaration', General Rules, and Specific Shipper Rules.
+                        You are a senior Customs House Agent (CHA) Document Auditor working for SOHAM LOGISTICS PVT. LTD. (CHA CODE: AAHCS5361ECH005). 
+                        Your absolute objective is to audit the staff's 'Checklist' generated via USOFT export software against the 'Invoice', 'GST Invoice', 'Declaration' and master guidelines.
+                        
+                        You must verify all 50 critical parameters of the shipping bill layout including Port of Loading, AD Code, HSN/RITC Codes, Net/Gross Weights, and values like RoDTEP, ROSCTL, DBK, and IGST.
+                        
+                        CRITICAL AUDIT RULE: If values like Freight, Insurance, Commission, or Discount are declared on the Checklist but are completely missing or unverified in primary invoices/declarations, flag a prominent alert.
                         
                         Provide your analysis response in clear Hindi/Hinglish language so the staff can easily understand.
                         Structure your response precisely like this:
