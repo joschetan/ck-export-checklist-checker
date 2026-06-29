@@ -110,8 +110,13 @@ with st.sidebar:
             st.success("Access Granted!")
             st.markdown("---")
             
-            # Formatted Tabs as per your exact requirement
-            admin_tab = st.radio("Choose Action:", ["General Rules (All Shippers)", "Specific Shipper Rules", "View / Delete Existing Rules"])
+            # Formatted Tabs including the new Bulk Master Upload
+            admin_tab = st.radio("Choose Action:", [
+                "General Rules (All Shippers)", 
+                "Specific Shipper Rules", 
+                "View / Delete Existing Rules",
+                "📦 Upload Bulk Master Excel"
+            ])
             
             if admin_tab == "General Rules (All Shippers)":
                 st.subheader("🌐 General Instructions")
@@ -164,7 +169,42 @@ with st.sidebar:
                             st.rerun()
                 else:
                     st.caption("No specific shippers trained yet.")
-                        
+            
+            elif admin_tab == "📦 Upload Bulk Master Excel":
+                st.subheader("📦 Upload Master Excel Standards")
+                st.markdown("""
+                यहाँ आप अपने लैपटॉप की मुख्य एक्सेल फाइल अपलोड कर सकते हैं (चाहे उसमें 3 शीट्स हों या 5-6 शीट्स)। 
+                यह अपलोड होते ही पुरानी पूरी मास्टर सेटिंग्स को हटाकर इसे ही नया ताज़ा बेस (Fresh Base) मान लेगा।
+                """)
+                
+                uploaded_master_excel = st.file_uploader("Upload Master Excel File (.xlsx)", type=["xlsx"])
+                
+                if uploaded_master_excel is not None:
+                    if st.button("Save & Overwrite Master Database 💾"):
+                        with st.spinner("Reading all sheets and locking in GitHub..."):
+                            try:
+                                # Read all available sheets dynamically without hardcoding names
+                                excel_file = pd.ExcelFile(uploaded_master_excel)
+                                master_data_dict = {}
+                                
+                                for sheet_name in excel_file.sheet_names:
+                                    df_sheet = pd.read_excel(uploaded_master_excel, sheet_name=sheet_name)
+                                    # Convert to dictionary format for JSON storage
+                                    master_data_dict[sheet_name] = df_sheet.to_dict(orient="records")
+                                
+                                # Convert the entire structure to JSON and overwrite on GitHub
+                                success = github_file_operation(
+                                    "master_excel_database.json", 
+                                    json.dumps(master_data_dict, indent=4)
+                                )
+                                
+                                if success:
+                                    st.success(f"🎉 सफलता! आपकी एक्सेल की सभी {len(excel_file.sheet_names)} शीट्स का डेटा गिटहब क्लाउड में सुरक्षित ओवरराइट कर दिया गया है।")
+                                else:
+                                    st.error("गिटहब पर डेटा सेव करने में कोई समस्या आई। कृपया सीक्रेट्स टोकन जांचें।")
+                            except Exception as ex:
+                                st.error(f"Error reading Excel sheets: {str(ex)}")
+                                
         elif password != "":
             st.error("Incorrect Password!")
 
@@ -178,7 +218,7 @@ shipper_list = list(trained_shippers.keys())
 if not shipper_list:
     st.info("👋 Welcome! Please use the Admin panel to train the AI first.")
 else:
-    selected_shipper = st.selectbox("🔍 Search & Select Shipper Name", ["-- Select Shipper --"] + shipper_list)
+    selected_shipper = st.selectbox("🔍 Search & Select Shipper Name", ["-- Select Shipper --"] + list(trained_shippers.keys()))
     
     if selected_shipper != "-- Select Shipper --":
         st.markdown(f'<div class="section-box"><h3>📂 Upload Documents for {selected_shipper}</h3>', unsafe_allow_html=True)
@@ -235,7 +275,6 @@ else:
             if reply_pwd == "CK@SOHAM":
                 st.success("Training Access Enabled!")
                 
-                # NEW FUNCTION: Upload new dataset Excel/PDF directly during live analysis correction
                 uploaded_correction_file = st.file_uploader("Upload New Data File for this specific case (Optional Excel/PDF)", type=["xlsx", "xls", "csv", "pdf"])
                 user_feedback = st.text_area("Write your reply/instruction to the AI (What it missed or needs to remember):")
                 
@@ -257,7 +296,6 @@ else:
                                 
                                 update_response = client.models.generate_content(model='gemini-2.5-flash', contents=[training_prompt])
                                 
-                                # Appends new textual feedback and appends new excel data seamlessly
                                 save_rules(selected_shipper, update_response.text, corr_text)
                                 st.success("🎉 'Aapki baat ko hamesha ke liye yaad kar liya gaya hai!' (Database updated permanently on GitHub)")
                                 del st.session_state.last_report
