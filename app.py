@@ -8,7 +8,7 @@ from google import genai
 from google.genai import types
 
 # Page Configuration
-st.set_page_config(page_title="CK EXPORT CHECKLIST CHECKER", layout="wide")
+st.set_page_config(page_title="CK EXPORT CHECKLIST CHECKER", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""
     <style>
     .main-title { font-size:34px !important; font-weight: bold; color: #1E3A8A; text-align: center; margin-bottom:20px; }
