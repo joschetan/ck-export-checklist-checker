@@ -2,10 +2,12 @@ import streamlit as st
 import pandas as pd
 import os
 import json
+import requests
+import base64
 from google import genai
 from google.genai import types
 
-# Page Configuration & Title Setup
+# Page Configuration
 st.set_page_config(page_title="CK EXPORT CHECKLIST CHECKER", layout="wide")
 st.markdown("""
     <style>
@@ -19,7 +21,7 @@ st.markdown("""
 
 st.markdown('<div class="main-title">🚢 CK EXPORT CHECKLIST CHECKER</div>', unsafe_allow_html=True)
 
-# Initialize Gemini Client using Secrets
+# Initialize Gemini Client
 def get_gemini_client():
     if "GEMINI_API_KEY" in st.secrets:
         return genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
@@ -28,46 +30,75 @@ def get_gemini_client():
 client = get_gemini_client()
 
 # ------------------------------------------------------------------
-# DATA HANDLING (Rules Storage)
+# GITHUB CLOUD DATABASE LOGIC (PERMANENT STORAGE)
 # ------------------------------------------------------------------
-DATA_FILE = "shipper_rules.json"
-GENERAL_RULES_FILE = "general_rules.json"
+GITHUB_TOKEN = st.secrets.get("GITHUB_TOKEN", "")
+GITHUB_USER = st.secrets.get("GITHUB_USER", "")
+GITHUB_REPO = st.secrets.get("GITHUB_REPO", "")
+
+def github_file_operation(filename, content=None, delete=False):
+    if not GITHUB_TOKEN or not GITHUB_USER or not GITHUB_REPO:
+        return None if content is None else False
+    url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{filename}"
+    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+    
+    res = requests.get(url, headers=headers)
+    sha = res.json().get("sha") if res.status_code == 200 else None
+    
+    if content is None and not delete:
+        if res.status_code == 200:
+            file_bytes = base64.b64decode(res.json()["content"])
+            return file_bytes.decode("utf-8") if filename.endswith(".json") else file_bytes
+        return "" if filename.endswith(".json") else None
+        
+    if delete:
+        if sha:
+            requests.delete(url, headers=headers, json={"message": f"Delete {filename}", "sha": sha})
+        return True
+        
+    encoded_content = base64.b64encode(content if isinstance(content, bytes) else content.encode("utf-8")).decode("utf-8")
+    data = {"message": f"Update {filename}", "content": encoded_content}
+    if sha: data["sha"] = sha
+    return requests.put(url, headers=headers, json=data).status_code in [200, 201]
 
 def load_rules():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+    data = github_file_operation("shipper_rules.json")
+    if data:
+        try: return json.loads(data)
+        except: return {}
     return {}
 
-def save_rules(shipper_name, instructions, excel_text=""):
+def save_rules(shipper_name, instructions, new_excel_text=""):
     rules = load_rules()
     s_name = shipper_name.upper().strip()
-    # Keep old info if overwriting via reply
-    existing_excel = rules.get(s_name, {}).get("excel_data_summary", "")
-    final_excel = excel_text if excel_text else existing_excel
     
+    existing_data = rules.get(s_name, {"instructions": "", "excel_data_summary": ""})
+    
+    # Append/Merge logic for continuous training
+    old_excel = existing_data.get("excel_data_summary", "")
+    if new_excel_text and new_excel_text != "[PDF_MASTER_FILE_SAVED]":
+        combined_excel = old_excel + "\n\n--- ADDITIONAL TRAINING DATA ADDED ---\n" + new_excel_text if old_excel else new_excel_text
+    else:
+        combined_excel = old_excel if old_excel else new_excel_text
+
+    # Merge new instructions with previous text instead of overwriting completely
+    old_instructions = existing_data.get("instructions", "")
+    if instructions and old_instructions and instructions != old_instructions:
+        combined_instructions = old_instructions + "\n" + instructions
+    else:
+        combined_instructions = instructions if instructions else old_instructions
+
     rules[s_name] = {
-        "instructions": instructions,
-        "excel_data_summary": final_excel
+        "instructions": combined_instructions,
+        "excel_data_summary": combined_excel
     }
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(rules, f, indent=4)
-
-def load_general_rules():
-    if os.path.exists(GENERAL_RULES_FILE):
-        with open(GENERAL_RULES_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {"instructions": "", "has_pdf": os.path.exists("general_sample.pdf")}
-
-def save_general_rules(instructions, has_pdf=False):
-    with open(GENERAL_RULES_FILE, "w", encoding="utf-8") as f:
-        json.dump({"instructions": instructions, "has_pdf": has_pdf}, f, indent=4)
+    github_file_operation("shipper_rules.json", json.dumps(rules, indent=4))
 
 trained_shippers = load_rules()
-general_rules_data = load_general_rules()
+general_rules_data = json.loads(github_file_operation("general_rules.json") or '{"instructions":""}')
 
 # ------------------------------------------------------------------
-# SECTION 1: ADMIN CONTROL / AI TRAINING (PASSWORD: CK@SOHAM)
+# ADMIN CONTROL PANEL
 # ------------------------------------------------------------------
 with st.sidebar:
     st.markdown('<h2 class="admin-header">⚙️ Admin / AI Training Control</h2>', unsafe_allow_html=True)
@@ -79,197 +110,157 @@ with st.sidebar:
             st.success("Access Granted!")
             st.markdown("---")
             
-            admin_tab = st.radio("Choose Action:", ["General Rules (All Shippers)", "Specific Shipper Rules"])
+            # Formatted Tabs as per your exact requirement
+            admin_tab = st.radio("Choose Action:", ["General Rules (All Shippers)", "Specific Shipper Rules", "View / Delete Existing Rules"])
             
             if admin_tab == "General Rules (All Shippers)":
                 st.subheader("🌐 General Instructions")
-                gen_pdf = st.file_uploader("Upload Sample Checklist (PDF)", type=["pdf"], key="admin_gen_pdf")
-                gen_instructions = st.text_area("Write General Instructions:", value=general_rules_data.get("instructions", ""), height=150)
-                
+                gen_instructions = st.text_area("Write General Instructions (Job check karte waqt dhyan rakhne yogya niyam):", value=general_rules_data.get("instructions", ""), height=200)
                 if st.button("Save General Instructions 💾"):
-                    save_general_rules(gen_instructions, has_pdf=(gen_pdf is not None))
-                    if gen_pdf:
-                        with open("general_sample.pdf", "wb") as f:
-                            f.write(gen_pdf.read())
-                    st.success("✅ General Instructions saved successfully!")
+                    github_file_operation("general_rules.json", json.dumps({"instructions": gen_instructions}, indent=4))
+                    st.success("✅ General rules locked in cloud database!")
                     st.rerun()
                     
             elif admin_tab == "Specific Shipper Rules":
                 st.subheader("🏢 Specific Shipper Setup")
-                new_shipper = st.text_input("Enter Shipper Name (e.g. BKT)").upper().strip()
-                uploaded_master = st.file_uploader("Upload Shipper Master File", type=["xlsx", "xls", "csv", "pdf"])
+                new_shipper = st.text_input("Enter New Shipper Name (e.g. BKT)").upper().strip()
+                admin_instructions = st.text_area("Write Shipper General Rules / Base Conditions:", height=150)
                 
-                current_instr = trained_shippers.get(new_shipper, {}).get("instructions", "") if new_shipper else ""
-                admin_instructions = st.text_area("Write Specific Instructions:", value=current_instr, height=150)
-                
-                if st.button("Train AI for this Shipper 🧠"):
+                if st.button("Save New Shipper 🧠"):
                     if new_shipper and admin_instructions:
-                        master_text = ""
-                        if uploaded_master is not None:
-                            if uploaded_master.name.endswith('.pdf'):
-                                with open(f"{new_shipper}_master.pdf", "wb") as f:
-                                    f.write(uploaded_master.read())
-                                master_text = "[PDF_MASTER_FILE_SAVED]"
-                            else:
-                                df = pd.read_csv(uploaded_master) if uploaded_master.name.endswith('.csv') else pd.read_excel(uploaded_master)
-                                master_text = df.to_string()
-                        
-                        save_rules(new_shipper, admin_instructions, master_text)
-                        st.success(f"✅ AI trained for {new_shipper}!")
+                        save_rules(new_shipper, admin_instructions, "")
+                        st.success(f"✅ New Shipper '{new_shipper}' successfully registered with initial rules!")
                         st.rerun()
+                    else:
+                        st.error("Please enter both Shipper Name and Instructions.")
+                        
+            elif admin_tab == "View / Delete Existing Rules":
+                st.subheader("📋 View / Delete Existing Rules")
+                
+                # Global rules view
+                with st.expander("🌐 View Active General Rules"):
+                    st.info(general_rules_data.get("instructions", "No general rules active."))
+                
+                st.markdown("---")
+                
+                # Filter by Shipper Name Dropdown to reduce cognitive load
+                if trained_shippers:
+                    search_shipper = st.selectbox("🎯 Select Shipper to View Saved Rules/Data List:", ["-- Select Shipper --"] + list(trained_shippers.keys()))
+                    
+                    if search_shipper != "-- Select Shipper --":
+                        s_info = trained_shippers[search_shipper]
+                        st.markdown(f"### 📄 Rules History for {search_shipper}:")
+                        st.info(s_info.get("instructions", "No text rules recorded."))
+                        
+                        if s_info.get("excel_data_summary"):
+                            with st.expander("📊 View Accumulated Excel/Text Data Brain Memory"):
+                                st.text(s_info.get("excel_data_summary"))
+                        
+                        if st.button(f"Erase {search_shipper} Memory Completely 🗑️"):
+                            del trained_shippers[search_shipper]
+                            github_file_operation("shipper_rules.json", json.dumps(trained_shippers, indent=4))
+                            github_file_operation(f"{search_shipper}_master.pdf", delete=True)
+                            st.success(f"✅ Erased all records for {search_shipper}.")
+                            st.rerun()
+                else:
+                    st.caption("No specific shippers trained yet.")
+                        
         elif password != "":
             st.error("Incorrect Password!")
 
 # ------------------------------------------------------------------
-# SECTION 2: USER AUDIT / CHECKLIST VERIFICATION
+# USER PANEL / STAFF VERIFICATION
 # ------------------------------------------------------------------
 st.markdown('<h2 class="user-header">📋 Staff Verification Panel</h2>', unsafe_allow_html=True)
 
 shipper_list = list(trained_shippers.keys())
 
 if not shipper_list:
-    st.info("👋 Welcome! Please use the Admin panel on the left to train the AI first.")
+    st.info("👋 Welcome! Please use the Admin panel to train the AI first.")
 else:
     selected_shipper = st.selectbox("🔍 Search & Select Shipper Name", ["-- Select Shipper --"] + shipper_list)
     
     if selected_shipper != "-- Select Shipper --":
         st.markdown(f'<div class="section-box"><h3>📂 Upload Documents for {selected_shipper}</h3>', unsafe_allow_html=True)
-        
-        # 1. Mandatory Checklist Upload
         f_checklist = st.file_uploader("1. Upload Checklist (PDF) *Mandatory*", type=["pdf"])
-        
-        # 2. UP TO 5 INVOICES / PACKING LISTS MULTIPLE UPLOAD
-        f_invoices = st.file_uploader("2. Upload Invoices & Packing Lists (PDF) *Up to 5 files allowed*", type=["pdf"], accept_multiple_files=True)
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            f_gst = st.file_uploader("3. Upload GST Invoice (PDF) *Optional*", type=["pdf"])
-        with col2:
-            f_decl = st.file_uploader("4. Upload Declaration (PDF) *Optional*", type=["pdf"])
-        
+        f_invoices = st.file_uploader("2. Upload Invoices & Packing Lists (PDF) *Up to 5 files*", type=["pdf"], accept_multiple_files=True)
+        f_gst = st.file_uploader("3. Upload GST Invoice (PDF) *Optional*", type=["pdf"])
+        f_decl = st.file_uploader("4. Upload Declaration (PDF) *Optional*", type=["pdf"])
         st.markdown('</div>', unsafe_allow_html=True)
         
         if st.button("🚀 Analyze & Check Mistakes"):
-            if not f_checklist:
-                st.error("Please upload the mandatory Checklist PDF file.")
-            elif not f_invoices or len(f_invoices) > 5:
-                st.error("Please upload at least 1 and maximum 5 Invoice/Packing List PDF files.")
-            else:
-                with st.spinner("AI is auditing documents based on rules..."):
+            if f_checklist and f_invoices:
+                with st.spinner("AI is auditing documents against history databases..."):
                     try:
                         uploaded_contents = []
-                        
-                        # Add Checklist
                         uploaded_contents.append(types.Part.from_bytes(data=f_checklist.read(), mime_type="application/pdf"))
-                        
-                        # Add up to 5 Invoices
                         for inv in f_invoices:
                             uploaded_contents.append(types.Part.from_bytes(data=inv.read(), mime_type="application/pdf"))
+                        if f_gst: uploaded_contents.append(types.Part.from_bytes(data=f_gst.read(), mime_type="application/pdf"))
+                        if f_decl: uploaded_contents.append(types.Part.from_bytes(data=f_decl.read(), mime_type="application/pdf"))
                             
-                        # Add Optional files if uploaded
-                        if f_gst:
-                            uploaded_contents.append(types.Part.from_bytes(data=f_gst.read(), mime_type="application/pdf"))
-                        if f_decl:
-                            uploaded_contents.append(types.Part.from_bytes(data=f_decl.read(), mime_type="application/pdf"))
-                            
-                        if os.path.exists("general_sample.pdf"):
-                            with open("general_sample.pdf", "rb") as f:
-                                uploaded_contents.append(types.Part.from_bytes(data=f.read(), mime_type="application/pdf"))
-                        if os.path.exists(f"{selected_shipper}_master.pdf"):
-                            with open(f"{selected_shipper}_master.pdf", "rb") as f:
-                                uploaded_contents.append(types.Part.from_bytes(data=f.read(), mime_type="application/pdf"))
+                        ship_pdf_bytes = github_file_operation(f"{selected_shipper}_master.pdf")
+                        if ship_pdf_bytes:
+                            uploaded_contents.append(types.Part.from_bytes(data=ship_pdf_bytes, mime_type="application/pdf"))
                         
                         shipper_info = trained_shippers[selected_shipper]
-                        shipper_specific_rules = shipper_info.get("instructions", "")
-                        shipper_excel_data = shipper_info.get("excel_data_summary", "")
-                        general_instructions = general_rules_data.get("instructions", "")
-                        
                         system_instruction = """
                         You are a senior Customs House Agent (CHA) Document Auditor working for SOHAM LOGISTICS PVT. LTD. (CHA CODE: AAHCS5361ECH005). 
-                        Your absolute objective is to audit the staff's 'Checklist' generated via USOFT export software against multiple uploaded Invoices, Packing lists, and optional GST/Declaration documents.
-                        
-                        Provide your analysis response in clear Hindi/Hinglish language so the staff can easily understand.
-                        Structure your response precisely like this:
-                        ❌ **Alert / Warning:** [List data mismatches, typos, or specific custom rule violations here]
-                        ⚠️ **Manual Check Needed:** [List parameters that could not be verified automatically]
-                        ✅ **OK:** [List what fields perfectly matched]
+                        Audit the USOFT export checklist against multiple documents and rules. Provide output precisely in Hindi/Hinglish.
+                        Structure:
+                        ❌ **Alert / Warning:** [Data mismatches]
+                        ⚠️ **Manual Check Needed:** [Unverified details]
+                        ✅ **OK:** [Matched fields]
                         """
                         
-                        final_prompt = f"""
-                        --- MANDATORY GENERAL RULES FOR ALL SHIPPERS ---
-                        {general_instructions}
-                        
-                        --- SPECIFIC RULES FOR THIS SHIPPER ({selected_shipper}) ---
-                        {shipper_specific_rules}
-                        
-                        --- MASTER EXCEL DATA FOR THIS SHIPPER (IF APPLICABLE) ---
-                        {shipper_excel_data}
-                        
-                        Please audit the uploaded staff documents strictly according to these criteria.
-                        """
+                        final_prompt = f"GENERAL RULES:\n{general_rules_data.get('instructions')}\n\nSPECIFIC RULES:\n{shipper_info.get('instructions')}\n\nDATABASE MASTER RECORDS:\n{shipper_info.get('excel_data_summary')}\n\nPlease analyze now."
                         
                         response = client.models.generate_content(
                             model='gemini-2.5-flash',
                             contents=uploaded_contents + [final_prompt],
                             config=types.GenerateContentConfig(system_instruction=system_instruction, temperature=0.2)
                         )
-                        
                         st.session_state.last_report = response.text
                         st.session_state.active_shipper = selected_shipper
-                        
-                    except Exception as e:
-                        st.error(f"An error occurred during analysis: {str(e)}")
+                    except Exception as e: st.error(f"Error: {str(e)}")
         
-        # Display the result report if it exists in state
         if "last_report" in st.session_state and st.session_state.active_shipper == selected_shipper:
             st.markdown("### 📢 Audit Report (Result)")
             st.markdown(f'<div class="report-box">{st.session_state.last_report}</div>', unsafe_allow_html=True)
             
             st.markdown("---")
-            st.markdown("### 🧠 Train AI On This Report (Reply Option)")
+            st.markdown("### 🧠 Train AI On This Report (Continuous Learning Feedback)")
             
-            # Secure Password Field to enable reply
             reply_pwd = st.text_input("Enter Password to Reply & Train AI", type="password", key="reply_pwd_input")
-            
             if reply_pwd == "CK@SOHAM":
                 st.success("Training Access Enabled!")
-                user_feedback = st.text_area("Write your reply/correction to the AI (e.g., 'AD Code '6470013' sahi hai, use RBI Code se match mat karo...'):")
                 
-                if st.button("Submit Reply & Update Brain 🚀"):
-                    if user_feedback:
-                        with st.spinner("AI is processing your correction..."):
-                            # Ask Gemini to learn from this feedback and merge it with previous rules
-                            current_rules = trained_shippers[selected_shipper]["instructions"]
-                            
-                            training_prompt = f"""
-                            You are an expert system manager. The user has given feedback on your recent audit report.
-                            OLD RULES FOR THIS SHIPPER:
-                            {current_rules}
-                            
-                            THE REPORT YOU GENERATED:
-                            {st.session_state.last_report}
-                            
-                            USER'S CORRECTION / REPLY:
-                            {user_feedback}
-                            
-                            Task: Read the user's correction carefully. Merge this new instruction into the OLD RULES logically so that next time this mistake is NOT repeated. Return ONLY the newly updated complete set of instructions in clear Hindi/English. Do not output anything else.
-                            """
-                            
+                # NEW FUNCTION: Upload new dataset Excel/PDF directly during live analysis correction
+                uploaded_correction_file = st.file_uploader("Upload New Data File for this specific case (Optional Excel/PDF)", type=["xlsx", "xls", "csv", "pdf"])
+                user_feedback = st.text_area("Write your reply/instruction to the AI (What it missed or needs to remember):")
+                
+                if st.button("Submit Feedback & Append to Shipper Memory 🚀"):
+                    if user_feedback or uploaded_correction_file:
+                        with st.spinner("Merging feedback permanently into GitHub Cloud Database..."):
                             try:
-                                update_response = client.models.generate_content(
-                                    model='gemini-2.5-flash',
-                                    contents=[training_prompt]
-                                )
+                                corr_text = ""
+                                if uploaded_correction_file is not None:
+                                    if uploaded_correction_file.name.endswith('.pdf'):
+                                        github_file_operation(f"{selected_shipper}_master.pdf", uploaded_correction_file.read())
+                                        corr_text = "[PDF_MASTER_FILE_SAVED]"
+                                    else:
+                                        df = pd.read_csv(uploaded_correction_file) if uploaded_correction_file.name.endswith('.csv') else pd.read_excel(uploaded_correction_file)
+                                        corr_text = df.to_string()
+
+                                current_rules = trained_shippers[selected_shipper]["instructions"]
+                                training_prompt = f"OLD RULES:\n{current_rules}\n\nREPORT:\n{st.session_state.last_report}\n\nFEEDBACK:\n{user_feedback}\n\nMerge feedback into rules logically. Output ONLY complete updated text rules."
                                 
-                                # Save newly updated rules back to database
-                                save_rules(selected_shipper, update_response.text)
-                                st.success("🎉 'Aapki baat ko hamesha ke liye yaad kar liya gaya hai!' (AI brain updated successfully)")
-                                st.balloons()
-                                del st.session_state.last_report # clear report view to refresh
+                                update_response = client.models.generate_content(model='gemini-2.5-flash', contents=[training_prompt])
+                                
+                                # Appends new textual feedback and appends new excel data seamlessly
+                                save_rules(selected_shipper, update_response.text, corr_text)
+                                st.success("🎉 'Aapki baat ko hamesha ke liye yaad kar liya gaya hai!' (Database updated permanently on GitHub)")
+                                del st.session_state.last_report
                                 st.rerun()
                             except Exception as ex:
                                 st.error(f"Error during training: {str(ex)}")
-                    else:
-                        st.error("Please enter a reply message.")
-            elif reply_pwd != "":
-                st.error("Incorrect Password! Reply option locked.")
